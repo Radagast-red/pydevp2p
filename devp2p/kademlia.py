@@ -220,6 +220,19 @@ class RoutingTable(object):
         self.buckets[index] = a
         self.buckets.insert(index + 1, b)
 
+    def getCurrentNetSizeEst(self):
+        bucket_est = []
+        for bucket in self.buckets:
+            depth = bucket.depth
+            if depth == k_id_size:
+                depth = 0
+            bucket_est.append( len(bucket.nodes) * 2 ** (depth + 1) )
+        sizeEst = 0
+        for est in bucket_est:
+            sizeEst = sizeEst + est
+        sizeEst = sizeEst / len(bucket_est)
+        return sizeEst
+
     @property
     def idle_buckets(self):
         one_hour_ago = time.time() - k_idle_bucket_refresh_interval
