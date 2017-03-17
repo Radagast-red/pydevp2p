@@ -138,6 +138,10 @@ def test_neighbours():
         node_b.id = node_a.id - 1
         assert node_a == routing.neighbours(node_b)[0]
 
+def test_net_size_est():
+    routing = routing_table(5000)
+    size = routing.get_current_net_size_est()
+    assert size < 3*5000 and size > 4990
 
 def test_wellformedness():
     """

@@ -220,13 +220,13 @@ class RoutingTable(object):
         self.buckets[index] = a
         self.buckets.insert(index + 1, b)
 
-    def getCurrentNetSizeEst(self):
-        bucket_est = []
+    def get_current_net_size_est(self):
+        bucket_est = set()
         for bucket in self.buckets:
             depth = bucket.depth
             if depth == k_id_size:
                 depth = 0
-            bucket_est.append( len(bucket.nodes) * 2 ** (depth + 1) )
+            bucket_est.add(len(bucket.nodes) * 2 ** (depth + 1))
         sizeEst = 0
         for est in bucket_est:
             sizeEst = sizeEst + est
