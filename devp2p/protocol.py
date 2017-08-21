@@ -1,4 +1,3 @@
-import gevent
 import rlp
 from rlp import sedes
 from .multiplexer import Packet
@@ -15,7 +14,7 @@ class SubProtocolError(ProtocolError):
     pass
 
 
-class BaseProtocol(gevent.Greenlet):
+class BaseProtocol:
 
     """
     A protocol mediates between the network and the service.
@@ -116,7 +115,6 @@ class BaseProtocol(gevent.Greenlet):
         self.peer = peer
         self.service = service
         self._setup()
-        super(BaseProtocol, self).__init__()
 
     def __repr__(self):
         return '<{} {}>'.format(self.__class__.__name__, self.peer)
@@ -172,14 +170,9 @@ class BaseProtocol(gevent.Greenlet):
 
     def start(self):
         log.debug('starting', proto=self)
-        super(BaseProtocol, self).start()
         self.service.on_wire_protocol_start(self)
-
-    def _run(self):
-        pass
 
     def stop(self):
         log.debug('stopping', proto=self)
         self.is_stopped = True
         self.service.on_wire_protocol_stop(self)
-        super(BaseProtocol, self).kill()

@@ -215,12 +215,12 @@ class Peer:
             log.debug('failed to handle packet', peer=self, error=e)
             self.stop()
 
-    def send(self, data):
+    async def send(self, data):
         if not data:
             return
         #self.safe_to_read.clear()  # make sure we don't accept any data until message is sent
         try:
-            self.connection.sendall(data)  # check if gevent chunkes and switches contexts
+            await self.connection.sendall(data)  # check if gevent chunkes and switches contexts
             log.debug('wrote data', size=len(data), ts=time.time())
         except socket.error as e:
             log.debug('write error', errno=e.errno, reason=e.strerror)

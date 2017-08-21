@@ -1,9 +1,8 @@
 #!/usr/bin/env python
-from gevent import Greenlet
 from devp2p import utils
 
 
-class BaseService(Greenlet):
+class BaseService:
 
     """
     service instances are added to the application under
@@ -21,7 +20,6 @@ class BaseService(Greenlet):
     required_services = []
 
     def __init__(self, app):
-        Greenlet.__init__(self)
         self.is_stopped = False
         self.app = app
         self.config = utils.update_config_with_defaults(app.config, self.default_config)
@@ -31,11 +29,9 @@ class BaseService(Greenlet):
 
     def start(self):
         self.is_stopped = False
-        Greenlet.start(self)
 
     def stop(self):
         self.is_stopped = True
-        Greenlet.kill(self)
 
     @classmethod
     def register_with_app(klass, app):
@@ -47,10 +43,6 @@ class BaseService(Greenlet):
         s = klass(app)
         app.register_service(s)
         return s
-
-    def _run(self):
-        "implement this for the greenlet event loop"
-        pass
 
 
 class WiredService(BaseService):

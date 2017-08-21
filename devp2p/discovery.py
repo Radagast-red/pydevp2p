@@ -2,10 +2,9 @@
 import re
 import time
 from socket import AF_INET, AF_INET6
-
+import socket
+import asyncio
 from repoze.lru import LRUCache
-import gevent
-import gevent.socket
 import ipaddress
 import rlp
 from rlp.utils import decode_hex, is_integer, str_to_bytes, bytes_to_str, safe_ord
@@ -552,21 +551,21 @@ class NodeDiscovery(BaseService, DiscoveryProtocolTransport):
         log.debug('sending', size=len(message), to=address)
         try:
             self.server.sendto(message, (address.ip, address.udp_port))
-        except gevent.socket.error as e:
+        except socket.error as e:
             log.debug('udp write error', address=address, errno=e.errno, reason=e.strerror)
             log.debug('waiting for recovery')
-            gevent.sleep(0.5)
+            asyncio.sleep(0.5)
 
     def receive(self, address, message):
         assert isinstance(address, Address)
         self.protocol.receive(address, message)
 
-    def _handle_packet(self, message, ip_port):
+    async def _handle_packet(self, message, ip_port):
         try:
             log.debug('handling packet', address=ip_port, size=len(message))
             assert len(ip_port) == 2
             address = Address(ip=ip_port[0], udp_port=ip_port[1])
-            self.receive(address, message)
+            await self.receive(address, message)
         except Exception as e:
             log.debug("failed to handle discovery packet",
                       error=e, message=message, ip_port=ip_port)
@@ -579,6 +578,20 @@ class NodeDiscovery(BaseService, DiscoveryProtocolTransport):
         # nat port mappin
         self.nat_upnp = add_portmap(port, 'UDP', 'Ethereum DEVP2P Discovery')
         log.info('starting listener', port=port, host=ip)
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 0)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setblocking(False)
+        s.bind(self.listen_addr)
+        s.listen(10)
+
+        async def server():
+            while not self.is_server_stopped:
+                conn, addr = await asyncio.get_event_loop().sock_accept(s)
+                asyncio.get_event_loop().create_task(self._handle_packet(conn, addr))
+
+        asyncio.get_event_loop().create_task(server())
+
         self.server = DatagramServer((ip, port), handle=self._handle_packet)
         self.server.start()
         super(NodeDiscovery, self).start()
@@ -587,11 +600,6 @@ class NodeDiscovery(BaseService, DiscoveryProtocolTransport):
         nodes = [Node.from_uri(x) for x in self.app.config['discovery']['bootstrap_nodes']]
         if nodes:
             self.protocol.kademlia.bootstrap(nodes)
-
-    def _run(self):
-        log.debug('_run called')
-        evt = gevent.event.Event()
-        evt.wait()
 
     def stop(self):
         log.info('stopping discovery')
