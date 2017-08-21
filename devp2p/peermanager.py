@@ -1,13 +1,9 @@
 import random
-import gevent
-import socket
 import atexit
 import time
-import re
-from gevent.server import StreamServer
-from gevent.socket import create_connection, timeout
+import asyncio.streams
+import socket
 from .service import WiredService
-from .protocol import BaseProtocol
 from .p2p_protocol import P2PProtocol
 from .upnp import add_portmap, remove_portmap
 from devp2p import kademlia
@@ -62,6 +58,7 @@ class PeerManager(WiredService):
         WiredService.__init__(self, app)
         self.peers = []
         self.errors = PeerErrors() if self.config['log_disconnects'] else PeerErrorsBase()
+        self.is_server_stopped = False
 
         # setup nodeid based on privkey
         if 'id' not in self.config['p2p']:
@@ -69,7 +66,22 @@ class PeerManager(WiredService):
                 decode_hex(self.config['node']['privkey_hex']))
 
         self.listen_addr = (self.config['p2p']['listen_host'], self.config['p2p']['listen_port'])
-        self.server = StreamServer(self.listen_addr, handle=self._on_new_connection)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setblocking(False)
+        s.bind(self.listen_addr)
+        s.listen(10)
+
+        async def handler(conn, addr):
+            log.debug('incoming connection', connection=conn)
+            peer = self._start_peer(conn, addr)
+
+        async def server():
+            while not self.is_server_stopped:
+                conn, addr = await asyncio.get_event_loop().sock_accept(s)
+                asyncio.get_event_loop().create_task(handler(conn, addr))
+
+        asyncio.get_event_loop().create_task(server())
 
     def on_hello_received(self, proto, version, client_version_string, capabilities,
                           listen_port, remote_pubkey):
@@ -112,12 +124,11 @@ class PeerManager(WiredService):
     def _start_peer(self, connection, address, remote_pubkey=None):
         # create peer
         peer = Peer(self, connection, remote_pubkey=remote_pubkey)
-        peer.link(on_peer_exit)
+        #peer.link(on_peer_exit)
         log.debug('created new peer', peer=peer, fno=connection.fileno())
         self.peers.append(peer)
 
         # loop
-        peer.start()
         log.debug('peer started', peer=peer, fno=connection.fileno())
         assert not connection.closed
         return peer
@@ -131,7 +142,7 @@ class PeerManager(WiredService):
         getdefaulttimeout() is default
         """
         try:
-            connection = create_connection(address, timeout=self.connect_timeout)
+            connection = socket.create_connection(address, timeout=self.connect_timeout)
         except socket.timeout:
             log.debug('connection timeout', address=address, timeout=self.connect_timeout)
             self.errors.add(address, 'connection timeout')
@@ -163,19 +174,11 @@ class PeerManager(WiredService):
         )
         # start a listening server
         log.info('starting listener', addr=self.listen_addr)
-        self.server.set_handle(self._on_new_connection)
-        self.server.start()
+        #self.server.set_handle(self._on_new_connection)
+        #self.server.start()
         super(PeerManager, self).start()
-        gevent.spawn_later(0.001, self._bootstrap, self.config['p2p']['bootstrap_nodes'])
-        gevent.spawn_later(1, self._discovery_loop)
-
-    def _on_new_connection(self, connection, address):
-        log.debug('incoming connection', connection=connection)
-        peer = self._start_peer(connection, address)
-        # Explicit join is required in gevent >= 1.1.
-        # See: https://github.com/gevent/gevent/issues/594
-        # and http://www.gevent.org/whatsnew_1_1.html#compatibility
-        peer.join()
+        asyncio.get_event_loop().call_later(0.001, self._bootstrap, self.config['p2p']['bootstrap_nodes'])
+        asyncio.get_event_loop().call_later(1, self._discovery_loop)
 
     def num_peers(self):
         ps = [p for p in self.peers if p]
@@ -187,9 +190,9 @@ class PeerManager(WiredService):
     def remote_pubkeys(self):
         return [p.remote_pubkey for p in self.peers]
 
-    def _discovery_loop(self):
+    async def _discovery_loop(self):
         log.info('waiting for bootstrap')
-        gevent.sleep(self.discovery_delay)
+        await asyncio.sleep(self.discovery_delay)
         while not self.is_stopped:
             try:
                 num_peers, min_peers = self.num_peers(), self.config['p2p']['min_peers']
@@ -199,14 +202,14 @@ class PeerManager(WiredService):
                               min_peers=min_peers, known=len(kademlia_proto.routing))
                     nodeid = kademlia.random_nodeid()
                     kademlia_proto.find_node(nodeid)  # fixme, should be a task
-                    gevent.sleep(self.discovery_delay)  # wait for results
+                    await asyncio.sleep(self.discovery_delay)  # wait for results
                     neighbours = kademlia_proto.routing.neighbours(nodeid, 2)
                     if not neighbours:
-                        gevent.sleep(self.connect_loop_delay)
+                        await asyncio.sleep(self.connect_loop_delay)
                         continue
                     node = random.choice(neighbours)
                     if node.pubkey in self.remote_pubkeys():
-                        gevent.sleep(self.discovery_delay)
+                        await asyncio.sleep(self.discovery_delay)
                         continue
                     log.debug('connecting random', node=node)
                     local_pubkey = crypto.privtopub(decode_hex(self.config['node']['privkey_hex']))
@@ -221,15 +224,15 @@ class PeerManager(WiredService):
                 break
             except Exception as e:
                 log.error("discovery failed", error=e, num_peers=num_peers, min_peers=min_peers)
-            gevent.sleep(self.connect_loop_delay)
+            await asyncio.sleep(self.connect_loop_delay)
 
-        evt = gevent.event.Event()
-        evt.wait()
+        #evt = gevent.event.Event()
+        #evt.wait()
 
     def stop(self):
         log.info('stopping peermanager')
         remove_portmap(self.nat_upnp, self.config['p2p']['listen_port'], 'TCP')
-        self.server.stop()
+        self.is_server_stopped = True
         for peer in self.peers:
             peer.stop()
         super(PeerManager, self).stop()

@@ -10,7 +10,7 @@ from .multiplexer import MultiplexerError, Packet
 from .muxsession import MultiplexedSession
 from .crypto import ECIESDecryptionError
 from devp2p import slogging
-import gevent.socket
+import socket
 from devp2p import rlpxcipher
 from rlp.utils import decode_hex
 
@@ -57,7 +57,9 @@ class Peer:
         self.greenlets = dict()
 
         # Stop peer if hello not received in self.dumb_remote_timeout seconds
-        self.greenlets['dumb_checker'] = asyncio.get_event_loop().call_later(self.dumb_remote_timeout, self.check_if_dumb_remote)
+        self.greenlets['dumb_checker'] = asyncio.get_event_loop().call_later(
+            self.dumb_remote_timeout, self.check_if_dumb_remote)
+        asyncio.get_event_loop().call_soon(self._run_ingress_message)
 
     @property
     def remote_pubkey(self):
@@ -73,7 +75,7 @@ class Peer:
     def __repr__(self):
         try:
             pn = self.connection.getpeername()
-        except gevent.socket.error:
+        except socket.error:
             pn = ('not ready',)
         try:
             cv = '/'.join(self.remote_client_version.split('/')[:2])
@@ -216,51 +218,53 @@ class Peer:
     def send(self, data):
         if not data:
             return
-        self.safe_to_read.clear()  # make sure we don't accept any data until message is sent
+        #self.safe_to_read.clear()  # make sure we don't accept any data until message is sent
         try:
             self.connection.sendall(data)  # check if gevent chunkes and switches contexts
             log.debug('wrote data', size=len(data), ts=time.time())
-        except gevent.socket.error as e:
+        except socket.error as e:
             log.debug('write error', errno=e.errno, reason=e.strerror)
             self.report_error('write error %r' % e.strerror)
             self.stop()
-        except gevent.socket.timeout:
+        except socket.timeout:
             log.debug('write timeout')
             self.report_error('write timeout')
             self.stop()
-        self.safe_to_read.set()
+        #self.safe_to_read.set()
 
-    def _run_egress_message(self):
+    async def _run_egress_message(self):
         while not self.is_stopped:
-            self.send(self.mux.message_queue.get())
+            await self.send(self.mux.message_queue.get())
 
-    def _run_decoded_packets(self):
+    async def _run_decoded_packets(self):
         # handle decoded packets
         while not self.is_stopped:
-            self._handle_packet(self.mux.packet_queue.get())  # get_packet blocks
+            await self._handle_packet(self.mux.packet_queue.get())  # get_packet blocks
 
-    def _run_ingress_message(self):
+    async def _run_ingress_message(self):
         log.debug('peer starting main loop')
         assert not self.connection.closed, "connection is closed"
-        self.greenlets['decoder'] = gevent.spawn(self._run_decoded_packets)
-        self.greenlets['sender'] = gevent.spawn(self._run_egress_message)
+        self.greenlets['decoder'] = asyncio.get_event_loop().call_soon(
+            self._run_decoded_packets)
+        self.greenlets['sender'] = asyncio.get_event_loop().call_soon(
+            self._run_egress_message)
 
         while not self.is_stopped:
-            self.safe_to_read.wait()
+            #self.safe_to_read.wait()
+            # try:
+            #     socket.wait_read(self.connection.fileno())
+            # except socket.error as e:
+            #     log.debug('read error', errno=e.errno, reason=e.strerror, peer=self)
+            #     self.report_error('network error %s' % e.strerror)
+            #     if e.errno in(errno.EBADF,):
+            #         # ('Bad file descriptor')
+            #         self.stop()
+            #     else:
+            #         raise e
+            #         break
             try:
-                gevent.socket.wait_read(self.connection.fileno())
-            except gevent.socket.error as e:
-                log.debug('read error', errno=e.errno, reason=e.strerror, peer=self)
-                self.report_error('network error %s' % e.strerror)
-                if e.errno in(errno.EBADF,):
-                    # ('Bad file descriptor')
-                    self.stop()
-                else:
-                    raise e
-                    break
-            try:
-                imsg = self.connection.recv(4096)
-            except gevent.socket.error as e:
+                imsg = await self.connection.recv(4096)
+            except socket.error as e:
                 log.debug('read error', errno=e.errno, reason=e.strerror, peer=self)
                 self.report_error('network error %s' % e.strerror)
                 if e.errno in(errno.ENETDOWN, errno.ECONNRESET, errno.ETIMEDOUT,
@@ -284,18 +288,11 @@ class Peer:
                     self.report_error('multiplexer error')
                     self.stop()
 
-    _run = _run_ingress_message
-
     def stop(self):
         if not self.is_stopped:
             try:
                 self.is_stopped = True
                 log.debug('peer stopped', peer=self)
-                for g in self.greenlets.values():
-                    try:
-                        g.kill()
-                    except gevent.GreenletExit:
-                        pass
                 self.greenlets = None
                 for p in self.protocols.values():
                     p.stop()
@@ -304,7 +301,6 @@ class Peer:
                 log.debug("failed to gracefully shutdown peer", error=e)
             finally:
                 self.peermanager.peers.remove(self)
-                self.kill()
 
     def check_if_dumb_remote(self):
         "Stop peer if hello not received"
