@@ -1,4 +1,4 @@
-import gevent
+import queue
 from .multiplexer import Multiplexer, Packet
 from .rlpxcipher import RLPxSession
 from .crypto import ECCx
@@ -8,8 +8,8 @@ class MultiplexedSession(Multiplexer):
     def __init__(self, privkey, hello_packet, remote_pubkey=None):
         self.is_initiator = bool(remote_pubkey)
         self.hello_packet = hello_packet
-        self.message_queue = gevent.queue.Queue()  # wire msg egress queue
-        self.packet_queue = gevent.queue.Queue()  # packet ingress queue
+        self.message_queue = queue.Queue()  # wire msg egress queue
+        self.packet_queue = queue.Queue()  # packet ingress queue
         ecc = ECCx(raw_privkey=privkey)
         self.rlpx_session = RLPxSession(
             ecc, is_initiator=bool(remote_pubkey))

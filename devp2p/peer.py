@@ -1,6 +1,6 @@
 import time
 import errno
-import gevent
+import asyncio
 import operator
 from collections import OrderedDict
 from .protocol import BaseProtocol
@@ -23,7 +23,7 @@ class UnknownCommandError(Exception):
     pass
 
 
-class Peer(gevent.Greenlet):
+class Peer:
 
     remote_client_version = ''
     offset_based_dispatch = False
@@ -31,7 +31,6 @@ class Peer(gevent.Greenlet):
     dumb_remote_timeout = 10.0
 
     def __init__(self, peermanager, connection, remote_pubkey=None):
-        super(Peer, self).__init__()
         self.is_stopped = False
         self.hello_received = False
         self.peermanager = peermanager
@@ -52,13 +51,13 @@ class Peer(gevent.Greenlet):
         self.connect_service(self.peermanager)
 
         # assure, we don't get messages while replies are not read
-        self.safe_to_read = gevent.event.Event()
-        self.safe_to_read.set()
+        #self.safe_to_read = gevent.event.Event()
+        #self.safe_to_read.set()
 
         self.greenlets = dict()
 
         # Stop peer if hello not received in self.dumb_remote_timeout seconds
-        self.greenlets['dumb_checker'] = gevent.spawn_later(self.dumb_remote_timeout, self.check_if_dumb_remote)
+        self.greenlets['dumb_checker'] = asyncio.get_event_loop().call_later(self.dumb_remote_timeout, self.check_if_dumb_remote)
 
     @property
     def remote_pubkey(self):
@@ -264,7 +263,7 @@ class Peer(gevent.Greenlet):
             except gevent.socket.error as e:
                 log.debug('read error', errno=e.errno, reason=e.strerror, peer=self)
                 self.report_error('network error %s' % e.strerror)
-                if e.errno in(errno.ENETDOWN, errno.ECONNRESET, errno.ETIMEDOUT, 
+                if e.errno in(errno.ENETDOWN, errno.ECONNRESET, errno.ETIMEDOUT,
                               errno.EHOSTUNREACH, errno.ECONNABORTED):
                     # (Network down, Connection reset by peer, timeout, no route to host,
                     # Software caused connection abort (windows weirdness))

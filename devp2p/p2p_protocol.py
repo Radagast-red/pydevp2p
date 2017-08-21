@@ -1,5 +1,5 @@
 import time
-import gevent
+import asyncio
 from rlp import sedes
 from .multiplexer import Packet
 from .protocol import BaseProtocol
@@ -7,7 +7,7 @@ from devp2p import slogging
 import collections
 
 
-class ConnectionMonitor(gevent.Greenlet):
+class ConnectionMonitor:
 
     "monitors the connection by sending pings and checking pongs"
     ping_interval = 15.
@@ -40,7 +40,7 @@ class ConnectionMonitor(gevent.Greenlet):
             self.log.debug('pinging', monitor=self)
             self.proto.send_ping()
             now = self.last_request = time.time()
-            gevent.sleep(self.ping_interval)
+            asyncio.sleep(self.ping_interval)
             self.log.debug('latency', peer=self.proto, latency='%.3f' % self.latency())
             if now - self.last_response > self.response_delay_threshold:
                 self.log.debug('unresponsive_peer', monitor=self)
@@ -168,7 +168,7 @@ class P2PProtocol(BaseProtocol):
             log.debug('send_disconnect', peer=proto.peer, reason=self.reason_name(reason))
             proto.peer.report_error('sending disconnect %s' % self.reason_name(reason))
             # Defer disconnect until message is sent out.
-            gevent.spawn_later(0.5, proto.peer.stop)
+            asyncio.get_event_loop().call_later(0.5, proto.peer.stop)
             return dict(reason=reason)
 
         def receive(self, proto, data):
